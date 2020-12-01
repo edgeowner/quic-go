@@ -10,9 +10,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/lucas-clemente/quic-go/internal/utils"
+	"github.com/lucas-clemente/quic-go/internal/qerr"
 
 	"github.com/lucas-clemente/quic-go/internal/protocol"
+	"github.com/lucas-clemente/quic-go/internal/utils"
 	"github.com/lucas-clemente/quic-go/logging"
 
 	. "github.com/onsi/ginkgo"
@@ -171,15 +172,28 @@ var _ = Describe("Tracing", func() {
 				Expect(ev).To(HaveKeyWithValue("dst_cid", "05060708"))
 			})
 
-			It("records connection closes", func() {
+			It("records idle timeouts", func() {
 				tracer.ClosedConnection(logging.NewTimeoutCloseReason(logging.TimeoutReasonIdle))
 				entry := exportAndParseSingle()
 				Expect(entry.Time).To(BeTemporally("~", time.Now(), scaleDuration(10*time.Millisecond)))
 				Expect(entry.Category).To(Equal("transport"))
-				Expect(entry.Name).To(Equal("connection_state_updated"))
+				Expect(entry.Name).To(Equal("connection_closed"))
 				ev := entry.Event
-				Expect(ev).To(HaveKeyWithValue("new", "closed"))
+				Expect(ev).To(HaveLen(2))
+				Expect(ev).To(HaveKeyWithValue("owner", "local"))
 				Expect(ev).To(HaveKeyWithValue("trigger", "idle_timeout"))
+			})
+
+			It("records handshake timeouts", func() {
+				tracer.ClosedConnection(logging.NewTimeoutCloseReason(logging.TimeoutReasonHandshake))
+				entry := exportAndParseSingle()
+				Expect(entry.Time).To(BeTemporally("~", time.Now(), scaleDuration(10*time.Millisecond)))
+				Expect(entry.Category).To(Equal("transport"))
+				Expect(entry.Name).To(Equal("connection_closed"))
+				ev := entry.Event
+				Expect(ev).To(HaveLen(2))
+				Expect(ev).To(HaveKeyWithValue("owner", "local"))
+				Expect(ev).To(HaveKeyWithValue("trigger", "handshake_timeout"))
 			})
 
 			It("records a received stateless reset packet", func() {
@@ -187,10 +201,36 @@ var _ = Describe("Tracing", func() {
 				entry := exportAndParseSingle()
 				Expect(entry.Time).To(BeTemporally("~", time.Now(), scaleDuration(10*time.Millisecond)))
 				Expect(entry.Category).To(Equal("transport"))
-				Expect(entry.Name).To(Equal("packet_received"))
+				Expect(entry.Name).To(Equal("connection_closed"))
 				ev := entry.Event
-				Expect(ev).To(HaveKeyWithValue("packet_type", "stateless_reset"))
+				Expect(ev).To(HaveLen(3))
+				Expect(ev).To(HaveKeyWithValue("owner", "remote"))
+				Expect(ev).To(HaveKeyWithValue("trigger", "stateless_reset"))
 				Expect(ev).To(HaveKeyWithValue("stateless_reset_token", "00112233445566778899aabbccddeeff"))
+			})
+
+			It("records application errors", func() {
+				tracer.ClosedConnection(logging.NewApplicationCloseReason(1337, true))
+				entry := exportAndParseSingle()
+				Expect(entry.Time).To(BeTemporally("~", time.Now(), scaleDuration(10*time.Millisecond)))
+				Expect(entry.Category).To(Equal("transport"))
+				Expect(entry.Name).To(Equal("connection_closed"))
+				ev := entry.Event
+				Expect(ev).To(HaveLen(2))
+				Expect(ev).To(HaveKeyWithValue("owner", "remote"))
+				Expect(ev).To(HaveKeyWithValue("application_code", float64(1337)))
+			})
+
+			It("records transport errors", func() {
+				tracer.ClosedConnection(logging.NewTransportCloseReason(qerr.AEADLimitReached, false))
+				entry := exportAndParseSingle()
+				Expect(entry.Time).To(BeTemporally("~", time.Now(), scaleDuration(10*time.Millisecond)))
+				Expect(entry.Category).To(Equal("transport"))
+				Expect(entry.Name).To(Equal("connection_closed"))
+				ev := entry.Event
+				Expect(ev).To(HaveLen(2))
+				Expect(ev).To(HaveKeyWithValue("owner", "local"))
+				Expect(ev).To(HaveKeyWithValue("connection_code", "aead_limit_reached"))
 			})
 
 			It("records sent transport parameters", func() {
